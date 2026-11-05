@@ -11,7 +11,9 @@ const MIN_VERTICAL := 0.15  # stops near-horizontal "forever" bounces
 var speed := 700.0
 var floor_y := 890.0
 var active := false
+var has_split := false  # true once this ball has split, and always true for spawned balls
 
+var floor_check := Callable()
 
 func _ready() -> void:
 	collision_layer = 2  # balls
@@ -42,23 +44,28 @@ func _physics_process(delta: float) -> void:
 	if collision:
 		var collider := collision.get_collider()
 		var remainder := collision.get_remainder()
-		velocity = velocity.bounce(collision.get_normal()).normalized() * speed
-		_prevent_flat_bounce()
+		velocity = bounced_dir(velocity, collision.get_normal()) * speed
 		# spend the rest of this frame's movement in the new direction
 		move_and_collide(velocity.normalized() * remainder.length())
 		if collider and collider.has_method("hit"):
 			collider.hit()
 
 	if velocity.y > 0.0 and global_position.y >= floor_y - RADIUS:
-		active = false
-		global_position.y = floor_y - RADIUS
-		landed.emit(self)
+		if floor_check.is_valid() and floor_check.call(self):
+			# Bounce is active: reflect off the floor like a wall
+			global_position.y = floor_y - RADIUS - 0.5
+			velocity = bounced_dir(velocity, Vector2.UP) * speed
+		else:
+			active = false
+			global_position.y = floor_y - RADIUS
+			landed.emit(self)
 
-
-func _prevent_flat_bounce() -> void:
-	var d := velocity.normalized()
-	if absf(d.y) < MIN_VERTICAL:
+## Direction a ball travelling along `dir` leaves in after hitting a surface with `normal`.
+## Shared with the aim preview so the prediction matches the real bounce.
+static func bounced_dir(dir: Vector2, normal: Vector2) -> Vector2:
+	var d := dir.bounce(normal).normalized()
+	if absf(d.y) < MIN_VERTICAL:  # stops near-horizontal "forever" bounces
 		var sy := signf(d.y) if d.y != 0.0 else -1.0
 		d.y = MIN_VERTICAL * sy
 		d.x = signf(d.x) * sqrt(1.0 - d.y * d.y)
-		velocity = d * speed
+	return d

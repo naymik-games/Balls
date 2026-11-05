@@ -5,7 +5,9 @@ extends CanvasLayer
 
 signal reset_pressed
 signal speed_pressed
+signal ability_pressed(kind: String)
 
+var _ability_buttons := {}
 var _round_label: Label
 var _balls_label: Label
 var _game_over_label: Label
@@ -42,6 +44,19 @@ func _ready() -> void:
 	_speed_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE  # let the button get the click
 	_speed_icon.draw.connect(_draw_speed_icon)
 	speed_button.add_child(_speed_icon)
+	
+		# Ability buttons (bottom left)
+	var x := 8.0
+	for a in ["bump", "bounce", "boost"]:
+		var b := Button.new()
+		b.position = Vector2(x, 922)
+		b.size = Vector2(78, 32)
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_font_size_override("font_size", 14)
+		b.pressed.connect(func(): ability_pressed.emit(a))
+		add_child(b)
+		_ability_buttons[a] = b
+		x += 84.0
 
 
 func _make_label(pos: Vector2, font_size: int, color: Color) -> Label:
@@ -72,6 +87,12 @@ func show_game_over(final_round: int) -> void:
 func hide_game_over() -> void:
 	_game_over_label.visible = false
 
+
+func set_ability(kind: String, uses: int, enabled: bool, active: bool) -> void:
+	var b: Button = _ability_buttons[kind]
+	b.text = "%s %d" % [kind.capitalize(), uses]
+	b.disabled = not enabled
+	b.modulate = Color(1.0, 0.8, 0.3) if active else Color.WHITE
 
 func set_speed(value: int) -> void:
 	_speed = value

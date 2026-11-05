@@ -11,19 +11,26 @@ var dying := false
 
 var visual: Node2D
 var _tween: Tween
+var is_round := false
 
 
-func setup(p_hp: int, p_cell_size: float) -> void:
+func setup(p_hp: int, p_cell_size: float, p_round: bool = false) -> void:
 	hp = p_hp
 	start_hp = p_hp
 	cell_size = p_cell_size
+	is_round = p_round
 	collision_layer = 1
 	collision_mask = 0
 	add_to_group("blocks")
 	var shape := CollisionShape2D.new()
-	var rect := RectangleShape2D.new()
-	rect.size = Vector2(cell_size - 4.0, cell_size - 4.0)
-	shape.shape = rect
+	if is_round:
+		var circle := CircleShape2D.new()
+		circle.radius = (cell_size - 4.0) / 2.0
+		shape.shape = circle
+	else:
+		var rect := RectangleShape2D.new()
+		rect.size = Vector2(cell_size - 4.0, cell_size - 4.0)
+		shape.shape = rect
 	add_child(shape)
 
 	visual = Node2D.new()
@@ -95,10 +102,12 @@ func _spawn_burst() -> void:
 
 func _draw_visual() -> void:
 	var half := (cell_size - 4.0) / 2.0
-	visual.draw_rect(Rect2(-half, -half, half * 2.0, half * 2.0), _color_for_hp(hp))
+	if is_round:
+		visual.draw_circle(Vector2.ZERO, half, _color_for_hp(hp))
+	else:
+		visual.draw_rect(Rect2(-half, -half, half * 2.0, half * 2.0), _color_for_hp(hp))
 	visual.draw_string(ThemeDB.fallback_font, Vector2(-half, 22 * 0.35), str(hp),
 			HORIZONTAL_ALIGNMENT_CENTER, half * 2.0, 22, Color.WHITE)
-
 
 func _color_for_hp(value: int) -> Color:
 	return Color.from_hsv(fposmod(0.95 - value * 0.03, 1.0), 0.65, 0.9)

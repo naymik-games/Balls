@@ -11,9 +11,13 @@ const CEIL_Y := 80.0                  # top of play area (HUD sits above)
 const FLOOR_ROW := 15
 const LAST_ROW := FLOOR_ROW - 1       # a block reaching this row = game over
 const FLOOR_Y := CEIL_Y + FLOOR_ROW * CELL
+const HEIGHT := 960
 const SPAWN_ROW := 1                  # one block height below the ceiling
 const WALL_THICKNESS := 200.0
 const MIN_AIM_ANGLE_DEG := 5.0
+const AIM_MAX_LENGTH := 2000.0
+const AIM_COLOR := Color(0.459, 0.732, 0.487, 0.502)
+const AIM_WIDTH := 4.0
 const SPEED_STEPS := [1.0, 2.0, 3.0]
 
 const BLOCK_SCENE := preload("res://scenes/block.tscn")
@@ -23,6 +27,14 @@ const PICKUP_SCENE := preload("res://scenes/ball_pickup.tscn")
 
 const POWERUP_MIN_ROW := 0
 const POWERUP_MAX_ROW := LAST_ROW - 1
+
+const ABILITIES := ["bump", "bounce", "boost"]
+const ABILITY_USES := 3
+const BOOST_BALLS := 10
+const BOUNCE_COLOR := Color(0.3, 0.9, 1.0)
+
+
+
 # --- tuning ---
 @export var ball_speed := 700.0
 @export var ball_delay := 0.08
@@ -32,19 +44,29 @@ const POWERUP_MAX_ROW := LAST_ROW - 1
 ## If true, the launcher moves to where the first ball landed (Ballz style).
 @export var move_launcher_to_first_landing := false
 @export_range(0.0, 1.0) var powerup_chance := 0.5
+@export_range(0, 10) var aim_bounces := 1
+@export_range(0.0, 1.0) var circle_chance := 0.2
 
 @onready var board: Node2D = $Board
 @onready var balls_node: Node2D = $Balls
 @onready var hud = $HUD
 
 
-var state := State.AIMING
+var state := State.AIMING:
+	set(v):
+		state = v
+		_refresh_abilities()
 var round_number := 1
 var ball_reserve := 1
 var launcher_x := WIDTH / 2.0
 var balls_in_flight := 0
-var aiming := false
+var aiming := false:
+	set(v):
+		aiming = v
+		_refresh_abilities()
 var aim_dir := Vector2.ZERO
+var aim_path := PackedVector2Array()  # [origin, bounce point, end point]
+var _aim_shape: CircleShape2D
 var game_id := 0
 var next_launcher_x := -1.0
 var descend_tween: Tween
@@ -52,13 +74,24 @@ var launcher_tween: Tween
 
 var speed_index := 0
 
-var powerup_types: Array = [HorizontalBeam, VerticalBeam]
+var powerup_types: Array = [HorizontalBeam, VerticalBeam, Splitter, Upper]#HorizontalBeam, VerticalBeam, Splitter, Upper
 var active_powerup: Powerup
+
+var uses_left := {}
+var used_this_round := {}
+var bounce_armed := false
+var bounce_hits_left := 0
+var temp_balls := 0
+var bumping := false
+var bump_tween: Tween
 
 func _ready() -> void:
 	_build_walls()
 	hud.reset_pressed.connect(reset_game)
 	hud.speed_pressed.connect(_cycle_speed)
+	hud.ability_pressed.connect(_on_ability_pressed)
+	_aim_shape = CircleShape2D.new()
+	_aim_shape.radius = Ball.RADIUS
 	reset_game()
 
 
@@ -91,6 +124,14 @@ func reset_game() -> void:
 		descend_tween.kill()
 	if launcher_tween:
 		launcher_tween.kill()
+	if bump_tween:
+		bump_tween.kill()
+	bumping = false
+	uses_left = {"bump": ABILITY_USES, "bounce": ABILITY_USES, "boost": ABILITY_USES}
+	used_this_round.clear()
+	bounce_armed = false
+	bounce_hits_left = 0
+	temp_balls = 0
 	next_launcher_x = -1.0
 	for c in board.get_children():
 		c.queue_free()
@@ -105,7 +146,7 @@ func reset_game() -> void:
 	aim_dir = Vector2.ZERO
 	hud.hide_game_over()
 	hud.set_round(round_number)
-	hud.set_balls(ball_reserve)
+	hud.set_balls(_total_balls())
 	_set_speed_index(0)
 	_spawn_row(round_number)
 	_maybe_spawn_powerup()
@@ -116,9 +157,8 @@ func reset_game() -> void:
 # ---------------------------------------------------------------- input
 
 func _unhandled_input(event: InputEvent) -> void:
-	if state != State.AIMING:
+	if state != State.AIMING or bumping:
 		return
-	# Touch is emulated as mouse by default, so this covers mobile too.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			aiming = true
@@ -142,13 +182,66 @@ func _update_aim(pointer: Vector2) -> void:
 	var d := pointer - _launch_origin()
 	if d.y > -10.0:
 		aim_dir = Vector2.ZERO  # pointer below launcher = no shot (release to cancel)
+		aim_path = PackedVector2Array()
 	else:
 		var min_a := deg_to_rad(MIN_AIM_ANGLE_DEG)
 		var angle := clampf(d.angle(), -PI + min_a, -min_a)
 		aim_dir = Vector2.from_angle(angle)
+		aim_path = _trace_aim(_launch_origin(), aim_dir)
 	queue_redraw()
 
+## Predicts the ball's route: straight to the first thing it hits, then `aim_bounces` bounces.
+## Returns ball-center positions: [origin, hit 1, hit 2, ...].
+func _trace_aim(origin: Vector2, dir: Vector2) -> PackedVector2Array:
+	var path := PackedVector2Array([origin])
+	var pos := origin
+	for i in aim_bounces + 1:
+		var hit := _sweep_ball(pos, dir)
+		path.append(hit.pos)
+		if hit.normal == Vector2.ZERO:  # reached the floor, nothing to bounce off
+			break
+		dir = Ball.bounced_dir(dir, hit.normal)
+		# start a hair off the surface so the next sweep doesn't re-hit it
+		pos = hit.pos + hit.normal * 0.5
+	return path
 
+
+## Slides a ball-sized circle from `from` along `dir` until it touches a wall or block,
+## or reaches the floor. Returns {pos: where it stops, normal: surface normal, or ZERO
+## if it didn't hit anything solid}.
+func _sweep_ball(from: Vector2, dir: Vector2) -> Dictionary:
+	var motion := dir * AIM_MAX_LENGTH
+	var params := PhysicsShapeQueryParameters2D.new()
+	params.shape = _aim_shape
+	params.transform = Transform2D(0.0, from)
+	params.motion = motion
+	params.collision_mask = 1  # walls + blocks, same as Ball
+
+	var space := get_world_2d().direct_space_state
+	var fractions := space.cast_motion(params)  # [safe, unsafe]; [1, 1] = no hit
+	var safe: float = fractions[0]
+	var unsafe: float = fractions[1]
+	var pos := from + motion * safe
+	var normal := Vector2.ZERO
+
+	if unsafe < 1.0:
+		# ask the physics server which way the surface faces at the contact point
+		params.transform = Transform2D(0.0, from + motion * unsafe)
+		params.motion = Vector2.ZERO
+		params.margin = 1.0
+		var rest := space.get_rest_info(params)
+		normal = rest["normal"] if not rest.is_empty() else -dir
+		if normal.dot(dir) > 0.0:  # must face back toward the ball
+			normal = -normal
+
+	# a ball heading down lands on the floor instead
+	if dir.y > 0.0:
+		var floor_dist := (FLOOR_Y - Ball.RADIUS - from.y) / dir.y
+		if floor_dist < pos.distance_to(from):
+			pos = from + dir * floor_dist
+			normal = Vector2.ZERO
+
+	return {"pos": pos, "normal": normal}
 # ---------------------------------------------------------------- round flow
 
 func _fire(dir: Vector2) -> void:
@@ -156,22 +249,48 @@ func _fire(dir: Vector2) -> void:
 	var origin := _launch_origin()
 	next_launcher_x = -1.0
 	var my_game := game_id
-	var to_launch := ball_reserve
+	var to_launch := _total_balls()
+	if bounce_armed:
+		bounce_armed = false
+		bounce_hits_left = to_launch   # one floor hit per ball launched
 	balls_in_flight = to_launch
 	queue_redraw()
 
 	for i in to_launch:
 		if my_game != game_id:
 			return
-		var ball: Ball = BALL_SCENE.instantiate()
-		ball.speed = ball_speed
-		ball.floor_y = FLOOR_Y
-		ball.position = origin 
-		ball.landed.connect(_on_ball_landed)
-		balls_node.add_child(ball)
-		ball.launch(dir)
+		spawn_ball(origin, dir)
 		await get_tree().create_timer(ball_delay).timeout
 
+
+func spawn_ball(pos: Vector2, dir: Vector2) -> Ball:
+	var ball: Ball = BALL_SCENE.instantiate()
+	ball.speed = ball_speed
+	ball.floor_y = FLOOR_Y
+	ball.position = pos
+	ball.landed.connect(_on_ball_landed)
+	ball.floor_check = _try_floor_bounce
+	balls_node.add_child(ball)
+	ball.launch(dir)
+	return ball
+
+
+## Temporary ball from a splitter. It isn't part of the reserve, but it is counted
+## in flight so the round can't end while it's still bouncing around.
+func spawn_extra_ball(pos: Vector2, dir: Vector2) -> void:
+	balls_in_flight += 1
+	_add_extra_ball.call_deferred(pos, dir)  # can't add physics bodies mid-collision callback
+
+
+func _add_extra_ball(pos: Vector2, dir: Vector2) -> void:
+	var ball := spawn_ball(pos, dir)
+	ball.has_split = true
+
+
+## Same angle range as the player's aim.
+func random_up_dir() -> Vector2:
+	var min_a := deg_to_rad(MIN_AIM_ANGLE_DEG)
+	return Vector2.from_angle(randf_range(-PI + min_a, -min_a))
 
 func _on_ball_landed(ball: Ball) -> void:
 	if next_launcher_x < 0.0 and move_launcher_to_first_landing:
@@ -200,6 +319,10 @@ func _end_round() -> void:
 	var my_game := game_id
 	_set_speed_index(0)
 	_remove_powerup()
+	bounce_hits_left = 0
+	temp_balls = 0
+	used_this_round.clear()
+	hud.set_balls(ball_reserve)
 	round_number += 1
 	#if next_launcher_x >= 0.0:
 		#launcher_x = next_launcher_x
@@ -260,7 +383,7 @@ func _spawn_row(hp: int) -> void:
 
 func _add_block(col: int, row: int, hp: int) -> void:
 	var b: Block = BLOCK_SCENE.instantiate()
-	b.setup(hp, CELL)
+	b.setup(hp, CELL, randf() < circle_chance)
 	b.col = col
 	b.row = row
 	b.position = Vector2(_col_to_x(col), _row_to_y(row))
@@ -292,7 +415,7 @@ func _set_launcher_x(x: float) -> void:
 
 func _on_pickup_collected(_pickup: BallPickup) -> void:
 	ball_reserve += 1
-	hud.set_balls(ball_reserve)
+	hud.set_balls(_total_balls())
 
 
 # ---------------------------------------------------------------- powerups
@@ -354,16 +477,103 @@ func blocks_in_col(col: int) -> Array:
 	return board.get_children().filter(
 			func(n): return n is Block and not n.dying and n.col == col)
 
+
+# ---------------------------------------------------------------- abilities
+
+func _total_balls() -> int:
+	return ball_reserve + temp_balls
+
+
+func _refresh_abilities() -> void:
+	if hud == null:
+		return
+	var can_use := state == State.AIMING and not aiming and not bumping
+	for a in ABILITIES:
+		var used: bool = used_this_round.has(a)
+		hud.set_ability(a, uses_left[a], can_use and uses_left[a] > 0 and not used, used)
+
+
+func _on_ability_pressed(kind: String) -> void:
+	if state != State.AIMING or aiming or bumping:
+		return
+	if uses_left[kind] <= 0 or used_this_round.has(kind):
+		return
+	match kind:
+		"bump":
+			if not _activate_bump():
+				return
+		"bounce":
+			bounce_armed = true
+		"boost":
+			temp_balls = BOOST_BALLS
+			hud.set_balls(_total_balls())
+	uses_left[kind] -= 1
+	used_this_round[kind] = true
+	_refresh_abilities()
+	queue_redraw()
+
+
+## Pops everything in the top row, then slides the rest up one row.
+func _activate_bump() -> bool:
+	var nodes: Array = board.get_children().filter(
+			func(n): return not (n is Block and n.dying))
+	if nodes.is_empty():
+		return false  # nothing to bump, don't spend a use
+	bumping = true
+	bump_tween = create_tween().set_parallel(true)
+	for n in nodes:
+		if n.row <= SPAWN_ROW:
+			if n is Block:
+				n.hit(n.hp)  # normal destroy effect
+			else:
+				n.queue_free()  # ball pickup in the top row is lost
+		else:
+			n.row -= 1
+			bump_tween.tween_property(n, "position:y", _row_to_y(n.row), 0.25)
+	bump_tween.chain().tween_callback(_on_bump_done)
+	return true
+
+
+func _on_bump_done() -> void:
+	bumping = false
+	_refresh_abilities()
+
+
+## Called by each ball when it reaches the floor. True = reflect instead of landing.
+func _try_floor_bounce(_ball: Ball) -> bool:
+	if bounce_hits_left <= 0:
+		return false
+	bounce_hits_left -= 1
+	queue_redraw()
+	return true
+
+
 # ---------------------------------------------------------------- drawing
 
 func _draw() -> void:
-	draw_rect(Rect2(0, CEIL_Y, WIDTH, FLOOR_Y - CEIL_Y), Color(0.09, 0.10, 0.15))
-	draw_line(Vector2(0, FLOOR_Y), Vector2(WIDTH, FLOOR_Y), Color.WHITE, 2.0)
+	#draw_rect(Rect2(0, 0, WIDTH, CEIL_Y), Color(0.09, 0.10, 0.15))
+	#draw_line(Vector2(0, CEIL_Y), Vector2(WIDTH, CEIL_Y), Color.WHITE, 2.0)
+	#
+	#draw_rect(Rect2(0, CEIL_Y, WIDTH, FLOOR_Y - CEIL_Y), Color(0.09, 0.10, 0.15))
+	#
+	#draw_rect(Rect2(0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y), Color(0.09, 0.10, 0.15))
+	#
+	#draw_line(Vector2(0, FLOOR_Y), Vector2(WIDTH, FLOOR_Y), Color.WHITE, 2.0)
+	draw_rect(Rect2(0, 0, WIDTH, HEIGHT), Color(0.09, 0.10, 0.15))
+	draw_line(Vector2(0, CEIL_Y), Vector2(WIDTH, CEIL_Y), Color.WHITE, 4.0)
+	draw_line(Vector2(0, FLOOR_Y), Vector2(WIDTH, FLOOR_Y), Color.WHITE, 4.0)
 
 	var origin := _launch_origin()
 	draw_circle(origin, Ball.RADIUS, Color.WHITE)
 	if state == State.AIMING:
-		draw_string(ThemeDB.fallback_font, Vector2(launcher_x - 30.0, FLOOR_Y + 30.0),
-				"x%d" % ball_reserve, HORIZONTAL_ALIGNMENT_CENTER, 60.0, 18, Color.WHITE)
+		draw_string(ThemeDB.fallback_font, Vector2(launcher_x - 30.0, FLOOR_Y - 30.0),
+				"x%d" % _total_balls(), HORIZONTAL_ALIGNMENT_CENTER, 60.0, 18, Color.WHITE)
 		if aim_dir != Vector2.ZERO:
-			draw_dashed_line(origin, origin + aim_dir * 600.0, Color(1, 1, 1, 0.5), 2.0, 8.0)
+			if aim_dir != Vector2.ZERO and aim_path.size() >= 2:
+				for i in aim_path.size() - 1:
+					draw_dashed_line(aim_path[i], aim_path[i + 1], AIM_COLOR, AIM_WIDTH, 8.0)
+		if bounce_armed or bounce_hits_left > 0:
+			draw_line(Vector2(0, FLOOR_Y), Vector2(WIDTH, FLOOR_Y), BOUNCE_COLOR, 6.0)
+			if bounce_hits_left > 0:
+				draw_string(ThemeDB.fallback_font, Vector2(WIDTH - 90.0, FLOOR_Y - 10.0),
+						"Bounce %d" % bounce_hits_left, HORIZONTAL_ALIGNMENT_RIGHT, 80.0, 16, BOUNCE_COLOR)
