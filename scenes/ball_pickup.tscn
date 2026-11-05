@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bbhfl4myfbmkj"]
+
+[ext_resource type="Script" uid="uid://5of2enj55heg" path="res://scripts/ball_pickup.gd" id="1_r650d"]
+
+[node name="BallPickup" type="Area2D" unique_id=1540294106]
+script = ExtResource("1_r650d")
