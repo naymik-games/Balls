@@ -10,10 +10,14 @@ config_version=5
 
 [application]
 
-config/name="Balls"
-run/main_scene="uid://cemdvi237vmk3"
+config/name="SplitShot"
+run/main_scene="uid://daoy5fyxiba0k"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
+
+[autoload]
+
+Session="*uid://pem8s6xytjs2"
 
 [display]
 

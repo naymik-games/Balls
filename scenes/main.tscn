@@ -7,7 +7,10 @@
 script = ExtResource("1_0wfyh")
 pickup_chance = 0.9
 move_launcher_to_first_landing = true
-powerup_chance = 0.8
+powerup_chance = 0.0
+log_damage = true
+analyze_level = true
+play_generated_level = 90
 
 [node name="Board" type="Node2D" parent="." unique_id=977976532]
 

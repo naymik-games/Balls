@@ -1,7 +1,7 @@
 extends Node2D
 ## Game manager: board layout, aiming input, firing, round flow, spawning.
 
-enum State { AIMING, FIRING, GAME_OVER }
+enum State { AIMING, FIRING, GAME_OVER, WON }
 
 # --- layout (viewport is 540 x 960) ---
 const COLS := 10
@@ -14,7 +14,7 @@ const FLOOR_Y := CEIL_Y + FLOOR_ROW * CELL
 const HEIGHT := 960
 const SPAWN_ROW := 1                  # one block height below the ceiling
 const WALL_THICKNESS := 200.0
-const MIN_AIM_ANGLE_DEG := 5.0
+const MIN_AIM_ANGLE_DEG := 2.0
 const AIM_MAX_LENGTH := 2000.0
 const AIM_COLOR := Color(0.459, 0.732, 0.487, 0.502)
 const AIM_WIDTH := 4.0
@@ -46,6 +46,29 @@ const BOUNCE_COLOR := Color(0.3, 0.9, 1.0)
 @export_range(0.0, 1.0) var powerup_chance := 0.5
 @export_range(0, 10) var aim_bounces := 1
 @export_range(0.0, 1.0) var circle_chance := 0.2
+## Levels mode: assign a LevelData to play it. Leave empty for Classic.
+@export var level: LevelData
+## Quick test switch: plays LevelData.sample() when no level is assigned.
+@export var use_sample_level := false
+## Writes per-shot damage stats to user://damage_log.csv and prints a running average.
+@export var log_damage := false
+## Levels: prints the LevelAnalyzer report (pressure, win probability) when the game starts.
+@export var analyze_level := false
+## Debug: added to the starting reserve, so you can sample at higher ball counts.
+@export var debug_extra_balls := 0
+## Debug (Classic): start as if the run had already reached this round, with block HP
+## to match and a few older rows already on the board.
+@export var debug_start_round := 1
+
+@export var report_generated_levels := false
+@export var play_generated_level := 0   # >0 plays that level number
+
+## Bakes levels bake_from..bake_to to res://levels/ and quits. Run from the editor.
+@export var bake_levels := false
+@export var bake_from := 1
+@export var bake_to := 100
+## Replaces existing files, including any hand edits.
+@export var bake_overwrite := false
 
 @onready var board: Node2D = $Board
 @onready var balls_node: Node2D = $Balls
@@ -73,6 +96,8 @@ var descend_tween: Tween
 var launcher_tween: Tween
 
 var speed_index := 0
+var mode: GameMode
+var damage_log: DamageLog
 
 var powerup_types: Array = [HorizontalBeam, VerticalBeam, Splitter, Upper]#HorizontalBeam, VerticalBeam, Splitter, Upper
 var active_powerup: Powerup
@@ -85,6 +110,9 @@ var temp_balls := 0
 var bumping := false
 var bump_tween: Tween
 
+var end_panel: Node
+var back_button: Node
+
 func _ready() -> void:
 	_build_walls()
 	hud.reset_pressed.connect(reset_game)
@@ -92,6 +120,52 @@ func _ready() -> void:
 	hud.ability_pressed.connect(_on_ability_pressed)
 	_aim_shape = CircleShape2D.new()
 	_aim_shape.radius = Ball.RADIUS
+	
+	var gen_model := DamageModel.from_csv(DamageLog.PATH)
+	if gen_model == null:
+		gen_model = DamageModel.default()
+	if report_generated_levels:
+		LevelGenerator.print_report(80,100, gen_model, LAST_ROW, SPAWN_ROW)
+	if level == null and play_generated_level > 0:
+		level = LevelGenerator.generate(play_generated_level, gen_model, LAST_ROW, SPAWN_ROW)
+	
+	if bake_levels:
+		LevelBaker.bake(bake_from, bake_to, gen_model, LAST_ROW, SPAWN_ROW, bake_overwrite)
+		get_tree().quit()
+		return
+	
+	if Session.current_level != null:
+		level = Session.current_level
+	elif Session.classic_active:
+		# Classic from the menu is always a plain run, whatever the debug exports say.
+		level = null
+		use_sample_level = false
+		debug_start_round = 1
+	
+	if mode == null:
+		if level == null and use_sample_level:
+			level = LevelData.sample()
+		if level != null:
+			mode = LevelMode.new(level)
+		else:
+			mode = ClassicMode.new()
+	if analyze_level and level != null:
+		var model := DamageModel.from_csv(DamageLog.PATH)
+		if model == null:
+			model = DamageModel.default()
+		print(LevelAnalyzer.report_text(level, LevelAnalyzer.analyze(level, model, LAST_ROW, SPAWN_ROW)))
+	if log_damage:
+		damage_log = DamageLog.new()
+		
+	if Session.current_number > 0 or Session.classic_active:
+		back_button = LevelUI.make_back_button()
+		add_child(back_button)
+	reset_game()
+
+
+## Switch rules and restart.
+func set_mode(m: GameMode) -> void:
+	mode = m
 	reset_game()
 
 
@@ -120,6 +194,9 @@ func _add_wall(rect: Rect2) -> void:
 
 func reset_game() -> void:
 	game_id += 1  # cancels any in-progress launch coroutine
+	if is_instance_valid(end_panel):
+		end_panel.queue_free()
+	end_panel = null
 	if descend_tween:
 		descend_tween.kill()
 	if launcher_tween:
@@ -127,7 +204,10 @@ func reset_game() -> void:
 	if bump_tween:
 		bump_tween.kill()
 	bumping = false
-	uses_left = {"bump": ABILITY_USES, "bounce": ABILITY_USES, "boost": ABILITY_USES}
+	var granted := mode.starting_abilities(self)
+	uses_left = {}
+	for a in ABILITIES:
+		uses_left[a] = granted.get(a, 0)
 	used_this_round.clear()
 	bounce_armed = false
 	bounce_hits_left = 0
@@ -138,8 +218,8 @@ func reset_game() -> void:
 	for c in balls_node.get_children():
 		c.queue_free()
 	_remove_powerup()
-	round_number = 1
-	ball_reserve = 1
+	round_number = mode.starting_round(self)
+	ball_reserve = mode.starting_balls() + debug_extra_balls
 	launcher_x = WIDTH / 2.0
 	balls_in_flight = 0
 	aiming = false
@@ -148,8 +228,9 @@ func reset_game() -> void:
 	hud.set_round(round_number)
 	hud.set_balls(_total_balls())
 	_set_speed_index(0)
-	_spawn_row(round_number)
-	_maybe_spawn_powerup()
+	mode.setup(self)
+	if mode.powerups_enabled():
+		_maybe_spawn_powerup()
 	state = State.AIMING
 	queue_redraw()
 
@@ -250,6 +331,8 @@ func _fire(dir: Vector2) -> void:
 	next_launcher_x = -1.0
 	var my_game := game_id
 	var to_launch := _total_balls()
+	if damage_log != null:
+		damage_log.begin(self, to_launch, bounce_armed or temp_balls > 0)
 	if bounce_armed:
 		bounce_armed = false
 		bounce_hits_left = to_launch   # one floor hit per ball launched
@@ -323,6 +406,14 @@ func _end_round() -> void:
 	temp_balls = 0
 	used_this_round.clear()
 	hud.set_balls(ball_reserve)
+	if damage_log != null:
+		damage_log.end(self)
+
+	# win is checked before anything moves (round_number == shots taken so far)
+	if mode.check_win(self):
+		_finish_run(true, round_number)
+		return
+
 	round_number += 1
 	#if next_launcher_x >= 0.0:
 		#launcher_x = next_launcher_x
@@ -336,18 +427,40 @@ func _end_round() -> void:
 	for n in board.get_children():
 		if n is BallPickup and n.row >= LAST_ROW:
 			n.queue_free()
-	# any block on the last row = game over
-	for n in board.get_children():
-		if n is Block and not n.dying and n.row >= LAST_ROW:
-			state = State.GAME_OVER
-			hud.show_game_over(round_number)
-			queue_redraw()
-			return
 
-	_spawn_row(round_number)
-	_maybe_spawn_powerup()
+	if mode.check_lose(self):
+		_finish_run(false, round_number)
+		return
+
+	mode.on_round_end(self)
+	if mode.powerups_enabled():
+		_maybe_spawn_powerup()
 	state = State.AIMING
 	queue_redraw()
+
+
+## Ends the run. `count` is the shots taken (win) or the round reached (lose).
+func _finish_run(won: bool, count: int) -> void:
+	if Session.current_number > 0 and mode is LevelMode:
+		var info := {}
+		if won:
+			info = Session.complete_level(count)
+		state = State.WON if won else State.GAME_OVER
+		end_panel = LevelUI.make_end_panel(self, won, count, info)
+		add_child(end_panel)
+		queue_redraw()
+		return
+	if won:
+		state = State.WON
+		if hud.has_method("show_win"):
+			hud.show_win(count)
+		else:
+			print("Level cleared in %d shots" % count)  # TODO: add show_win() to the HUD
+	else:
+		state = State.GAME_OVER
+		hud.show_game_over(count)
+	queue_redraw()
+
 
 func _descend_rows() -> void:
 	var nodes := board.get_children()
@@ -370,27 +483,28 @@ func _col_to_x(col: int) -> float:
 	return col * CELL + CELL / 2.0
 
 
-func _spawn_row(hp: int) -> void:
+## Classic-style row: random columns, random shapes, maybe a ball pickup.
+func spawn_random_row(hp: int, row := SPAWN_ROW) -> void:
 	var cols: Array = range(COLS)
 	cols.shuffle()
 	var count := clampi(randi_range(min_blocks, max_blocks), 0, COLS)
 	for i in count:
-		_add_block(cols[i], SPAWN_ROW, hp)
+		add_block(cols[i], row, hp, randf() < circle_chance)
 	# a pickup goes in one of the remaining empty columns
 	if count < COLS and randf() < pickup_chance:
-		_add_pickup(cols[count], SPAWN_ROW)
+		add_pickup(cols[count], row)
 
 
-func _add_block(col: int, row: int, hp: int) -> void:
+func add_block(col: int, row: int, hp: int, circle := false) -> void:
 	var b: Block = BLOCK_SCENE.instantiate()
-	b.setup(hp, CELL, randf() < circle_chance)
+	b.setup(hp, CELL, circle)
 	b.col = col
 	b.row = row
 	b.position = Vector2(_col_to_x(col), _row_to_y(row))
 	board.add_child(b)
 
 
-func _add_pickup(col: int, row: int) -> void:
+func add_pickup(col: int, row: int) -> void:
 	var p: BallPickup = PICKUP_SCENE.instantiate()
 	p.col = col
 	p.row = row
@@ -449,6 +563,8 @@ func _open_cells() -> Array[Vector2i]:
 
 
 func _on_powerup_triggered(p: Powerup, ball: Ball) -> void:
+	if damage_log != null:
+		damage_log.note_assist()
 	p.apply(ball, self)
 	if p.single_use:
 		_remove_powerup()
@@ -466,6 +582,12 @@ func _remove_powerup() -> void:
 # helpers the powerups call through `game`
 func play_rect() -> Rect2:
 	return Rect2(0.0, CEIL_Y, WIDTH, FLOOR_Y - CEIL_Y)
+
+
+## Blocks that haven't started their destroy animation.
+func live_blocks() -> Array:
+	return board.get_children().filter(
+			func(n): return n is Block and not n.dying)
 
 
 func blocks_in_row(row: int) -> Array:
@@ -536,6 +658,10 @@ func _activate_bump() -> bool:
 
 func _on_bump_done() -> void:
 	bumping = false
+	# a bump can clear the last block (round_number - 1 = shots taken so far)
+	if mode.check_win(self):
+		_finish_run(true, round_number - 1)
+		return
 	_refresh_abilities()
 
 
