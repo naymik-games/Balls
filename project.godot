@@ -13,7 +13,7 @@ config_version=5
 config/name="SplitShot"
 run/main_scene="uid://daoy5fyxiba0k"
 config/features=PackedStringArray("4.7", "Mobile")
-config/icon="res://icon.svg"
+config/icon="uid://b1prtsyqsy7m3"
 
 [autoload]
 
@@ -35,3 +35,4 @@ common/physics_ticks_per_second=120
 
 rendering_device/driver.windows="d3d12"
 renderer/rendering_method="mobile"
+textures/vram_compression/import_etc2_astc=true
