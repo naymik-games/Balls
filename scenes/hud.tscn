@@ -2,5 +2,92 @@
 
 [ext_resource type="Script" uid="uid://b5pb5j1ipt0j0" path="res://scripts/hud.gd" id="1_ahhtf"]
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_g3078"]
+content_margin_left = 24.0
+content_margin_top = 24.0
+content_margin_right = 24.0
+content_margin_bottom = 24.0
+bg_color = Color(0.15199637, 0.15199634, 0.15199634, 1)
+corner_radius_top_left = 18
+corner_radius_top_right = 18
+corner_radius_bottom_right = 18
+corner_radius_bottom_left = 18
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ahhtf"]
+content_margin_left = 8.0
+content_margin_top = 8.0
+content_margin_right = 8.0
+content_margin_bottom = 8.0
+bg_color = Color(0.2, 0.23, 0.33, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
 [node name="HUD" type="CanvasLayer" unique_id=53776992]
 script = ExtResource("1_ahhtf")
+
+[node name="EndPanel" type="ColorRect" parent="." unique_id=365577137]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.6)
+
+[node name="CenterContainer" type="CenterContainer" parent="EndPanel" unique_id=1047468646]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="EndPanel/CenterContainer" unique_id=1563441395]
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_g3078")
+
+[node name="VBox" type="VBoxContainer" parent="EndPanel/CenterContainer/Panel" unique_id=563147443]
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="TitleLabel" type="Label" parent="EndPanel/CenterContainer/Panel/VBox" unique_id=2099440388]
+layout_mode = 2
+theme_override_font_sizes/font_size = 28
+text = "GAME OVER"
+horizontal_alignment = 1
+
+[node name="DetailsLabel" type="Label" parent="EndPanel/CenterContainer/Panel/VBox" unique_id=1696199643]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Reached Round 7"
+horizontal_alignment = 1
+
+[node name="PrimaryButton" type="Button" parent="EndPanel/CenterContainer/Panel/VBox" unique_id=1704736314]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_ahhtf")
+text = "NEXT"
+
+[node name="SecondaryButton" type="Button" parent="EndPanel/CenterContainer/Panel/VBox" unique_id=683795308]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_ahhtf")
+text = "LEVELS"
+
+[node name="ExtraButton" type="Button" parent="EndPanel/CenterContainer/Panel/VBox" unique_id=1083947343]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+theme_override_styles/normal = SubResource("StyleBoxFlat_ahhtf")
+text = "HOME"
+
+[node name="ReturnButton" type="Button" parent="." unique_id=1705986635]
+offset_left = 14.0
+offset_top = 12.0
+offset_right = 56.0
+offset_bottom = 43.0
+text = "Text"

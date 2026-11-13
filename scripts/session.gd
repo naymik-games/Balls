@@ -29,7 +29,7 @@ var debug_unlock_all := false
 
 var _count := -1
 var _levels := {}
-
+var classic_best: int = 0
 
 func _ready() -> void:
 	load_progress()
@@ -103,14 +103,24 @@ func complete_level(shots: int) -> Dictionary:
 		"unlocked_next": unlocked_next,
 		"has_next": n + 1 <= level_count(),
 	}
-
-
+func complete_classic(shots: int):
+	var pre_best = classic_best
+	var new: bool = false
+	if shots > classic_best:
+		classic_best = shots
+		new = true
+		save_progress()
+	return {
+		"previous": pre_best,
+		"new": new
+	}
 func load_progress() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE_PATH) != OK:
 		return
 	highest_unlocked = maxi(int(cfg.get_value("progress", "highest_unlocked", 1)), 1)
 	debug_unlock_all = bool(cfg.get_value("debug", "unlock_all", false))
+	classic_best = cfg.get_value("classic", "classic_best",0)
 	var saved: Dictionary = cfg.get_value("progress", "best_shots", {})
 	best_shots = {}
 	for k in saved:
@@ -122,6 +132,7 @@ func save_progress() -> void:
 	cfg.set_value("progress", "highest_unlocked", highest_unlocked)
 	cfg.set_value("progress", "best_shots", best_shots)
 	cfg.set_value("debug", "unlock_all", debug_unlock_all)
+	cfg.set_value("classic", "classic_best", classic_best)
 	var err := cfg.save(SAVE_PATH)
 	if err != OK:
 		push_error("Session: could not save progress (%s)" % error_string(err))

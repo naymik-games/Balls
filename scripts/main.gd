@@ -110,8 +110,8 @@ var temp_balls := 0
 var bumping := false
 var bump_tween: Tween
 
-var end_panel: Node
-var back_button: Node
+var _pending_end_action: Callable = func(): pass
+#e
 
 func _ready() -> void:
 	_build_walls()
@@ -157,9 +157,13 @@ func _ready() -> void:
 	if log_damage:
 		damage_log = DamageLog.new()
 		
-	if Session.current_number > 0 or Session.classic_active:
-		back_button = LevelUI.make_back_button()
-		add_child(back_button)
+	#if Session.current_number > 0 or Session.classic_active:
+		#back_button = LevelUI.make_back_button()
+		#add_child(back_button)
+	hud.primary_button_pressed.connect(_on_primary_end_pressed)
+	hud.secondary_button_pressed.connect(_on_secondary_end_pressed)
+	hud.extra_button_pressed.connect(_on_extra_end_pressed)
+	hud.return_pressed.connect(_on_return_pressed)
 	reset_game()
 
 
@@ -194,9 +198,9 @@ func _add_wall(rect: Rect2) -> void:
 
 func reset_game() -> void:
 	game_id += 1  # cancels any in-progress launch coroutine
-	if is_instance_valid(end_panel):
-		end_panel.queue_free()
-	end_panel = null
+	#if is_instance_valid(end_panel):
+		#end_panel.queue_free()
+	#end_panel = null
 	if descend_tween:
 		descend_tween.kill()
 	if launcher_tween:
@@ -231,6 +235,12 @@ func reset_game() -> void:
 	mode.setup(self)
 	if mode.powerups_enabled():
 		_maybe_spawn_powerup()
+		
+	if mode is LevelMode:
+		hud.set_return_text("Levels")
+	else:
+		hud.set_return_text("Home")
+		
 	state = State.AIMING
 	queue_redraw()
 
@@ -440,27 +450,59 @@ func _end_round() -> void:
 
 
 ## Ends the run. `count` is the shots taken (win) or the round reached (lose).
+#func _finish_run(won: bool, count: int) -> void:
+	#if Session.current_number > 0 and mode is LevelMode:
+		#var info := {}
+		#if won:
+			#info = Session.complete_level(count)
+		#state = State.WON if won else State.GAME_OVER
+		#end_panel = LevelUI.make_end_panel(self, won, count, info)
+		#add_child(end_panel)
+		#queue_redraw()
+		#return
+	#if won:
+		#state = State.WON
+		#if hud.has_method("show_win"):
+			#hud.show_win(count)
+		#else:
+			#print("Level cleared in %d shots" % count)  # TODO: add show_win() to the HUD
+	#else:
+		#state = State.GAME_OVER
+		#hud.show_game_over(count)
+		#
+	#queue_redraw()
 func _finish_run(won: bool, count: int) -> void:
-	if Session.current_number > 0 and mode is LevelMode:
+	state = State.WON if won else State.GAME_OVER
+	
+	if mode is LevelMode:
+		var n := Session.current_number
 		var info := {}
 		if won:
 			info = Session.complete_level(count)
-		state = State.WON if won else State.GAME_OVER
-		end_panel = LevelUI.make_end_panel(self, won, count, info)
-		add_child(end_panel)
-		queue_redraw()
-		return
-	if won:
-		state = State.WON
-		if hud.has_method("show_win"):
-			hud.show_win(count)
+			var shots_text := "%d shots" % count
+			var par := Session.par_of(n)
+			if par > 0:
+				shots_text += "   (par %d)" % par
+			var best := int(info.get("best", count))
+			var best_text := "New best!" if info.get("new_best", false) else "Best: %d" % best
+			
+			var primary_text = "Next level" if info.get("has_next", false) else ""
+			if info.get("has_next", false):
+				_pending_end_action = func(): Session.start_level.bind(n + 1).call()
+			
+			hud.show_end_panel("Level %d cleared" % n, "%s\n%s" % [shots_text, best_text], primary_text, "Retry", "Levels")
 		else:
-			print("Level cleared in %d shots" % count)  # TODO: add show_win() to the HUD
+			hud.show_end_panel("Level %d failed" % n, "Blocks reached the bottom on shot %d" % count, "Retry", "Levels", "")
+			_pending_end_action = func(): reset_game()
 	else:
-		state = State.GAME_OVER
-		hud.show_game_over(count)
+		var info = Session.complete_classic(count)
+		if info.new:
+			hud.show_end_panel("Victory!", "Reached Round %d. Previous best was %d." % [count,info.previous], "Play Again", "Menu", "")
+		else:
+			hud.show_end_panel("Game Over", "Reached Round %d. Current best is %d." % [count, info.previous], "Play Again", "Menu", "")
+		_pending_end_action = func(): reset_game()
+	
 	queue_redraw()
-
 
 func _descend_rows() -> void:
 	var nodes := board.get_children()
@@ -673,6 +715,29 @@ func _try_floor_bounce(_ball: Ball) -> bool:
 	queue_redraw()
 	return true
 
+# -------------------------- end buttons
+func _on_primary_end_pressed() -> void:
+	if mode is LevelMode and Session.current_number > 0 and state == State.WON:
+		var n := Session.current_number
+		Session.start_level(n + 1)
+	else:
+		reset_game()
+
+func _on_secondary_end_pressed() -> void:
+	if mode is LevelMode and Session.current_number > 0:
+		Session.open_select()
+	else:
+		Session.open_menu()
+
+func _on_extra_end_pressed() -> void:
+	if mode is LevelMode and Session.current_number > 0:
+		Session.open_select()
+
+func _on_return_pressed() -> void:
+	if mode is LevelMode:
+		Session.open_select()
+	else:
+		Session.open_menu()
 
 # ---------------------------------------------------------------- drawing
 

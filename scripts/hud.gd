@@ -1,28 +1,40 @@
 extends CanvasLayer
-## Round counter, reserve counter, reset button, game-over message.
-## Built in code so the scene is just a CanvasLayer + this script.
-
 
 signal reset_pressed
 signal speed_pressed
 signal ability_pressed(kind: String)
+signal primary_button_pressed
+signal secondary_button_pressed
+signal extra_button_pressed
+signal return_pressed
 
 var _ability_buttons := {}
 var _round_label: Label
 var _balls_label: Label
-var _game_over_label: Label
 var _speed_icon: Control
 var _speed := 1
 
+# End Panel UI Node References (adjust paths if your node names differ)
+@onready var end_panel: ColorRect = $EndPanel
+@onready var title_label: Label = $EndPanel/CenterContainer/Panel/VBox/TitleLabel
+@onready var details_label: Label = $EndPanel/CenterContainer/Panel/VBox/DetailsLabel
+@onready var primary_button: Button = $EndPanel/CenterContainer/Panel/VBox/PrimaryButton
+@onready var secondary_button: Button = $EndPanel/CenterContainer/Panel/VBox/SecondaryButton
+@onready var extra_button: Button = $EndPanel/CenterContainer/Panel/VBox/ExtraButton
+@onready var return_button: Button = $ReturnButton
 
 
 func _ready() -> void:
 	_round_label = _make_label(Vector2(0, 2), 48, Color.WHITE)
 	_balls_label = _make_label(Vector2(0, 54), 20, Color(0.7, 0.8, 0.9))
+	
+	if end_panel:
+		end_panel.visible = false
+		primary_button.pressed.connect(func(): primary_button_pressed.emit())
+		secondary_button.pressed.connect(func(): secondary_button_pressed.emit())
+		extra_button.pressed.connect(func(): extra_button_pressed.emit())
 
-	_game_over_label = _make_label(Vector2(0, 380), 56, Color(1.0, 0.4, 0.4))
-	_game_over_label.visible = false
-
+	# ... existing reset button, speed button, and ability buttons setup ...
 	var button := Button.new()
 	button.text = "Reset"
 	button.position = Vector2(448, 12)
@@ -31,7 +43,6 @@ func _ready() -> void:
 	button.pressed.connect(func(): reset_pressed.emit())
 	add_child(button)
 	
-		# Speed button (bottom right). The icon is drawn in code: 1-3 play triangles.
 	var speed_button := Button.new()
 	speed_button.position = Vector2(462, 922)
 	speed_button.size = Vector2(68, 32)
@@ -41,11 +52,10 @@ func _ready() -> void:
 
 	_speed_icon = Control.new()
 	_speed_icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_speed_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE  # let the button get the click
+	_speed_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_speed_icon.draw.connect(_draw_speed_icon)
 	speed_button.add_child(_speed_icon)
 	
-		# Ability buttons (bottom left)
 	var x := 8.0
 	for a in ["bump", "bounce", "boost"]:
 		var b := Button.new()
@@ -57,8 +67,12 @@ func _ready() -> void:
 		add_child(b)
 		_ability_buttons[a] = b
 		x += 84.0
-
-
+	
+	# Connect the return button if it exists in the scene
+	if return_button:
+		return_button.focus_mode = Control.FOCUS_NONE
+		return_button.pressed.connect(func(): return_pressed.emit())
+	
 func _make_label(pos: Vector2, font_size: int, color: Color) -> Label:
 	var label := Label.new()
 	label.position = pos
@@ -69,23 +83,34 @@ func _make_label(pos: Vector2, font_size: int, color: Color) -> Label:
 	add_child(label)
 	return label
 
-
 func set_round(value: int) -> void:
 	_round_label.text = str(value)
-
 
 func set_balls(value: int) -> void:
 	_balls_label.text = "Balls: %d" % value
 
-
-func show_game_over(final_round: int) -> void:
-	_game_over_label.text = "Game Over\nRound %d" % final_round
-	_game_over_label.size.y = 160
-	_game_over_label.visible = true
-
+func show_end_panel(title: String, details: String, primary_text: String, secondary_text: String, extra_text: String = "") -> void:
+	if not end_panel:
+		return
+	title_label.text = title
+	details_label.text = details
+	
+	primary_button.text = primary_text
+	primary_button.visible = not primary_text.is_empty()
+	
+	secondary_button.text = secondary_text
+	secondary_button.visible = not secondary_text.is_empty()
+	
+	extra_button.text = extra_text
+	extra_button.visible = not extra_text.is_empty()
+	
+	end_panel.visible = true
 
 func hide_game_over() -> void:
-	_game_over_label.visible = false
+	if end_panel:
+		end_panel.visible = false
+
+# ... keep set_ability, set_speed, _draw_speed_icon as before ...
 
 
 func set_ability(kind: String, uses: int, enabled: bool, active: bool) -> void:
@@ -115,3 +140,8 @@ func _draw_speed_icon() -> void:
 		])
 		_speed_icon.draw_colored_polygon(pts, color)
 		x += tri_w + gap
+
+
+func set_return_text(text: String) -> void:
+	if return_button:
+		return_button.text = text
