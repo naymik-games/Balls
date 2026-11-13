@@ -29,7 +29,7 @@ var debug_unlock_all := false
 
 var _count := -1
 var _levels := {}
-var classic_best: int = 0
+var classic_best: int = 999
 
 func _ready() -> void:
 	load_progress()
@@ -106,7 +106,7 @@ func complete_level(shots: int) -> Dictionary:
 func complete_classic(shots: int):
 	var pre_best = classic_best
 	var new: bool = false
-	if shots > classic_best:
+	if shots < classic_best:
 		classic_best = shots
 		new = true
 		save_progress()
@@ -120,7 +120,7 @@ func load_progress() -> void:
 		return
 	highest_unlocked = maxi(int(cfg.get_value("progress", "highest_unlocked", 1)), 1)
 	debug_unlock_all = bool(cfg.get_value("debug", "unlock_all", false))
-	classic_best = cfg.get_value("classic", "classic_best",0)
+	classic_best = cfg.get_value("classic", "classic_best",999)
 	var saved: Dictionary = cfg.get_value("progress", "best_shots", {})
 	best_shots = {}
 	for k in saved:
